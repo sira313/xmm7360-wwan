@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Jalankan FCC unlock sebelum ModemManager membuka port RPC.
+# Dipasang ke $PREFIX/bin/wwan-fcc-unlock.
+PREFIX="$(cd -- "$(dirname -- "$0")/.." && pwd)"
+FCC_SCRIPT="$PREFIX/share/ModemManager/fcc-unlock.available.d/8086:7360"
+
+for _ in {1..30}; do
+  [[ -c /dev/wwan0xmmrpc0 ]] && break
+  sleep 1
+done
+
+[[ -c /dev/wwan0xmmrpc0 ]] || exit 0
+exec timeout 30 bash "$FCC_SCRIPT" dummy wwan0xmmrpc0

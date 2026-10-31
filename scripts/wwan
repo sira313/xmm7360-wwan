@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# Aktifkan / matikan / cek WWAN Intel XMM7360.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
+
+usage() {
+  cat <<EOF
+Pemakaian: sudo $0 <perintah> [opsi]
+
+Perintah:
+  up        Aktifkan modem, buka SIM, daftar jaringan, connect
+  down      Putuskan koneksi dan matikan modem
+  status    Tampilkan status modem, sinyal, IP, route
+  sim       Tampilkan info SIM (dan buka PIN kalau perlu)
+  reset     Reset modem lewat ACPI (tanpa shutdown)
+  diag      Kumpulkan diagnostik AT + log ModemManager
+  install   Install dependency + ModemManager git
+
+Opsi:
+  --apn <apn>       Timpa APN dari config.env
+  --pin <pin>       PIN SIM
+  --metric <n>      Metric route (kecil = prioritas)
+  --name <nama>     Nama profil NetworkManager
+  --modem <n>       Index modem ModemManager
+  --reset           Reset modem dulu sebelum aktivasi
+  --no-ping         Lewati tes ping
+  -h, --help        Bantuan
+
+Contoh:
+  sudo $0 up
+  sudo $0 up --apn indosatgprs --pin 1234
+  sudo $0 up --metric 100
+  $0 status
+EOF
+}
+
+ORIG_ARGS=("$@")
+cmd="${1:-help}"
+[[ $# -gt 0 ]] && shift
+
+NO_PING=""
+RESET_FIRST=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apn)    [[ $# -ge 2 ]] || die "opsi --apn butuh nilai"; APN="$2"; shift 2 ;;
+    --pin)    [[ $# -ge 2 ]] || die "opsi --pin butuh nilai"; PIN="$2"; shift 2 ;;
+    --metric) [[ $# -ge 2 ]] || die "opsi --metric butuh nilai"; ROUTE_METRIC="$2"; shift 2 ;;
+    --name)   [[ $# -ge 2 ]] || die "opsi --name butuh nilai"; CONNECTION_NAME="$2"; shift 2 ;;
+    --modem)  [[ $# -ge 2 ]] || die "opsi --modem butuh nilai"; MODEM_ID="$2"; shift 2 ;;
+    --reset)  RESET_FIRST=1; shift ;;
+    --no-ping) NO_PING=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "opsi tidak dikenal: $1" ;;
+  esac
+done
+
+case "$cmd" in
+  up|down|sim|reset|diag)
+    if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+      exec sudo -- "$SCRIPT_DIR/wwan" "${ORIG_ARGS[@]}"
+    fi
+    ;;
+  install)
+    if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+      exec sudo -- "$SCRIPT_DIR/install.sh"
+    fi
+    exec "$SCRIPT_DIR/install.sh"
+    ;;
+esac
+
+cmd_up() {
+  have mmcli || die "mmcli tidak ada. Jalankan: sudo $0 install"
+  have nmcli || die "NetworkManager/nmcli tidak ada"
+  have ping  || die "ping tidak ada"
+
+  if [[ "$RESET_FIRST" -eq 1 ]]; then
+    cmd_reset
+  fi
+
+  ensure_service
+  fcc_unlock
+
+  if ! wait_for_modem 60; then
+    mmcli -L 2>&1 || true
+    die "modem tidak siap. Coba 'sudo $0 reset', atau shutdown penuh + cabut charger."
+  fi
+
+  enable_modem
+  unlock_sim
+  register_home
+
+  if ! wait_for_registration 60; then
+    warn "belum terdaftar ke jaringan; tetap mencoba connect"
+  fi
+
+  connect_nm "$APN"
+
+  local ip4
+  if ip4="$(wait_for_ip 30)"; then
+    log "wwan0 IP: $ip4"
+  else
+    warn "wwan0 belum mendapat IP"
+  fi
+
+  if [[ -z "$NO_PING" ]]; then
+    if ping -I wwan0 -c 2 -W 3 "$PING_TARGET" >/dev/null 2>&1; then
+      log "internet via WWAN OK"
+    else
+      warn "ping via wwan0 gagal (cek APN, sinyal, atau paket data)"
+    fi
+  fi
+
+  print_signal
+}
+
+cmd_down() {
+  nmcli connection down "$CONNECTION_NAME" 2>/dev/null || true
+  mmcli -m "$MODEM_ID" --disable >/dev/null 2>&1 || true
+  log "WWAN dimatikan"
+}
+
+cmd_status() {
+  echo "== ModemManager =="
+  mmcli -L 2>&1 || true
+
+  if modem_present; then
+    echo
+    mmcli -m "$MODEM_ID" 2>&1 | sed -n '1,45p'
+    echo
+    echo "== Sinyal =="
+    print_signal
+  fi
+
+  echo
+  echo "== NetworkManager =="
+  nmcli device status 2>&1 | grep -E 'DEVICE|wwan|gsm' || true
+
+  echo
+  echo "== Interface =="
+  ip -br addr show wwan0 2>&1 || true
+
+  echo
+  echo "== Route =="
+  ip route 2>&1 | grep wwan0 || true
+}
+
+cmd_sim() {
+  modem_present || die "modem tidak terdeteksi"
+  unlock_sim
+
+  local sim_path sim_id
+  sim_path="$(mm_key 'modem.generic.sim')"
+  [[ -n "$sim_path" && "$sim_path" != "--" ]] \
+    || die "SIM tidak terdeteksi. Duduk ulang SIM, lalu shutdown penuh + cabut charger."
+
+  sim_id="${sim_path##*/}"
+  mmcli -i "$sim_id" 2>&1
+}
+
+cmd_reset() {
+  local slot d
+  slot="$(lspci -Dn -d 8086:7360 2>/dev/null | awk '{print $1; exit}')"
+  [[ -n "$slot" ]] || die "modem 8086:7360 tidak ditemukan"
+
+  d="/sys/bus/pci/devices/$slot"
+  [[ -e "$d/reset_method" ]] \
+    || die "tidak ada reset_method. Lakukan shutdown penuh + cabut charger."
+
+  log "reset modem $slot"
+  systemctl stop ModemManager 2>/dev/null || true
+  echo "$slot" > /sys/bus/pci/drivers/iosm/unbind
+  sleep 1
+  echo acpi > "$d/reset_method" 2>/dev/null || true
+  echo 1 > "$d/reset"
+  sleep 5
+  echo "$slot" > /sys/bus/pci/drivers/iosm/bind
+  sleep 3
+  systemctl start ModemManager
+  wait_for_modem 60 || warn "modem belum siap setelah reset"
+}
+
+case "$cmd" in
+  up)      cmd_up ;;
+  down)    cmd_down ;;
+  status)  cmd_status ;;
+  sim)     cmd_sim ;;
+  reset)   cmd_reset ;;
+  diag)    exec "$SCRIPT_DIR/diag.sh" ;;
+  install) ;; # sudah ditangani di atas
+  help|-h|--help) usage ;;
+  *) usage; exit 1 ;;
+esac
