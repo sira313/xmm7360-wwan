@@ -1,9 +1,7 @@
 # WWAN Intel XMM7360 / Fibocom L850 di Arch Linux
 
-Panduan ini khusus untuk modem 4G bawaan laptop (Intel XMM7360, dijual juga sebagai
+Panduan ini khusus untuk modem 4G bawaan laptop (Intel XMM7360, atau dikenal juga sebagai
 Fibocom L850-GL) bisa dipakai di Arch Linux, lengkap dengan script otomasi.
-
----
 
 ## 1. Ringkasan
 
@@ -38,12 +36,6 @@ wwan0         : <IP privat dari operator>
 ping via wwan0: 0% packet loss
 ```
 
-> Contoh di atas disamarkan. IP `wwan0` adalah alamat privat CGNAT dari
-> operator, berubah setiap sesi, dan bukan alamat publik. Tetap tidak dimasukkan
-> ke dokumentasi repo.
-
----
-
 ## 2. Yang dibutuhkan
 
 - Laptop dengan modem **Intel XMM7360 / Fibocom L850-GL**.
@@ -55,7 +47,6 @@ ping via wwan0: 0% packet loss
 
 - Arch Linux (script menggunakan `pacman`).
 - Koneksi internet sementara (WiFi/ethernet) untuk mengunduh paket.
-- Akun dengan akses `sudo`.
 - SIM **nano** dengan paket data aktif. Di ThinkPad T495s, slotnya
   berupa tray combo microSD/nano-SIM di bagian belakang laptop.
 - Kernel 5.18 atau lebih baru. Cek dengan `uname -r`.
@@ -63,8 +54,6 @@ ping via wwan0: 0% packet loss
 > Catatan: jika IMEI modem belum terdaftar di CEIR operator Indonesia, kartu
 > bisa mendaftar ke jaringan tetapi data diblokir. Itu urusan registrasi IMEI,
 > bukan driver.
-
----
 
 ## 3. Cara kerja singkat
 
@@ -79,8 +68,6 @@ Tiga lapisan yang terlibat:
 
 Project ini juga memasang **FCC unlock**. Tanpa itu, modem membatasi radio
 (regulatory lock) dan tidak mau connect.
-
----
 
 ## 4. Instalasi
 
@@ -103,7 +90,7 @@ Installer akan:
 - memasang paket: `base-devel`, `meson`, `ninja`, `git`, `pkgconf`,
   `glib2-devel`, `tinyxxd`, `libgudev`, `polkit`, `ppp`,
   `mobile-broadband-provider-info`
-- mengunduh dan membangun ModemManager dari git main
+- mengunduh dan build ModemManager dari git main
 - memasang ke `/usr/local`
 - mengatur `/etc/ld.so.conf.d/local.conf` supaya library baru dipakai
 - menyambungkan config D-Bus dan polkit
@@ -129,7 +116,7 @@ Setelah mati:
    tray kembali sampai penuh.
 4. Nyalakan laptop.
 
-Reboot biasa **tidak** memutus daya modem. Shutdown penuh yang memutus.
+Reboot biasa **tidak** memutus daya modem, jadi harus shutdown.
 
 ### 4.4 Cek modem terdeteksi
 
@@ -184,8 +171,6 @@ Kalau tidak yakin, coba `internet` dulu, atau googling aja.
 - `100` → WWAN dipakai sebagai jalur utama.
 
 Bisa juga diubah sementara lewat opsi `--metric`.
-
----
 
 ## 6. Cara pakai
 
@@ -263,8 +248,6 @@ Untuk log debug ModemManager yang panjang:
 sudo ./scripts/diag.sh --full
 ```
 
----
-
 ## 7. Cek manual (tanpa script)
 
 ```bash
@@ -294,8 +277,6 @@ Scan operator:
 mmcli -m 0 --3gpp-scan --timeout=60
 ```
 
----
-
 ## 8. Troubleshooting
 
 ### `error: couldn't find the ModemManager process in the bus`
@@ -317,7 +298,7 @@ sudo ./scripts/install.sh
 
 Artinya modem tidak melihat SIM.
 
-1. Duduk ulang nano-SIM di tray, pastikan orientasi benar.
+1. Pasang ulang nano-SIM di tray, pastikan orientasi benar.
 2. `sudo shutdown -h now`, cabut charger, tahan power 10 detik.
 3. Nyalakan, lalu `sudo ./scripts/wwan up`.
 
@@ -367,8 +348,6 @@ sudo ./scripts/wwan reset
 Kalau sering terjadi, buat service resume reset (lihat referensi ArchWiki
 `Intel XMM 7360`).
 
----
-
 ## 9. Uninstall
 
 ```bash
@@ -385,8 +364,6 @@ sudo ldconfig
 Setelah itu install ulang paket `modemmanager` dari repo kalau ingin versi stabil
 (1.24.2), walaupun versi itu belum mendukung XMM7360.
 
----
-
 ## 10. Catatan teknis
 
 - ModemManager dibangun dengan `-Dqmi=false -Dqrtr=false -Dmbim=false
@@ -401,8 +378,6 @@ Setelah itu install ulang paket `modemmanager` dari repo kalau ingin versi stabi
   `/etc/ModemManager/fcc-unlock.d`, untuk menghindari race di port RPC.
 - Udev rule `99-wwan-nopm.rules` mematikan PCI runtime power management yang
   bisa membuat firmware XMM7360 crash.
-
----
 
 ## 11. Referensi
 
